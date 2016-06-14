@@ -1,7 +1,7 @@
 Source: consul
 Section: utils
 Priority: optional
-Maintainer: Andrea Bernardo Ciddio <bcandrea@gmail.com>
+Maintainer: Sebastien Badia <seb@sebian.fr>
 Homepage: http://www.consul.io
 Vcs-Git: https://github.com/hashicorp/consul.git
 Vcs-Browser: https://github.com/hashicorp/consul

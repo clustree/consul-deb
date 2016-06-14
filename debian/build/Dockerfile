@@ -1,5 +1,6 @@
 FROM       ubuntu:consul-deb-base
-MAINTAINER Andrea Bernardo Ciddio <bcandrea@gmail.com>
+#MAINTAINER Andrea Bernardo Ciddio <bcandrea@gmail.com>
+MAINTAINER Sebastien Badia <seb@sebian.fr>
 ARG        VERSION
 ARG        GIT_COMMIT
 
