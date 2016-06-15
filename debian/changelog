@@ -1,3 +1,9 @@
+consul (0.6.4-2~xenial1~clustree1) xenial; urgency=medium
+
+  * Run consul as consul user (and not uid 0)
+
+ -- Sebastien Badia <seb@sebian.fr>  Wed, 15 Jun 2016 16:11:39 +0200
+
 consul (0.6.4-1~xenial1~clustree1) xenial; urgency=medium
 
   * Clustree upload
