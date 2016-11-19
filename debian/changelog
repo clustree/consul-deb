@@ -1,3 +1,10 @@
+consul (0.7.1-1~xenial1~clustree1) xenial; urgency=medium
+
+  * Team upload.
+  * New upstream release.
+
+ -- Sebastien Badia <seb@sebian.fr>  Sat, 19 Nov 2016 15:29:38 +0100
+
 consul (0.7.1-1~yakkety1~ppa1) yakkety; urgency=low
 
   * No-change build for Yakkety.
