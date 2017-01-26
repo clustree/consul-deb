@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/consul/consul/structs"
+	"github.com/hashicorp/consul/logger"
 	"github.com/hashicorp/consul/testutil"
 	"github.com/hashicorp/go-cleanhttp"
 )
@@ -28,6 +29,26 @@ func makeHTTPServer(t *testing.T) (string, *HTTPServer) {
 }
 
 func makeHTTPServerWithConfig(t *testing.T, cb func(c *Config)) (string, *HTTPServer) {
+	return makeHTTPServerWithConfigLog(t, cb, nil, nil)
+}
+
+func makeHTTPServerWithACLs(t *testing.T) (string, *HTTPServer) {
+	dir, srv := makeHTTPServerWithConfig(t, func(c *Config) {
+		c.ACLDatacenter = c.Datacenter
+		c.ACLDefaultPolicy = "deny"
+		c.ACLMasterToken = "root"
+		c.ACLAgentToken = "root"
+		c.ACLAgentMasterToken = "towel"
+		c.ACLEnforceVersion8 = Bool(true)
+	})
+
+	// Need a leader to look up ACLs, so wait here so we don't need to
+	// repeat this in each test.
+	testutil.WaitForLeader(t, srv.agent.RPC, "dc1")
+	return dir, srv
+}
+
+func makeHTTPServerWithConfigLog(t *testing.T, cb func(c *Config), l io.Writer, logWriter *logger.LogWriter) (string, *HTTPServer) {
 	configTry := 0
 RECONF:
 	configTry += 1
@@ -36,7 +57,7 @@ RECONF:
 		cb(conf)
 	}
 
-	dir, agent := makeAgent(t, conf)
+	dir, agent := makeAgentLog(t, conf, l, logWriter)
 	servers, err := NewHTTPServers(agent, conf, agent.logOutput)
 	if err != nil {
 		if configTry < 3 {
@@ -223,6 +244,51 @@ func TestSetMeta(t *testing.T) {
 	}
 }
 
+func TestHTTPAPI_TranslateAddrHeader(t *testing.T) {
+	// Header should not be present if address translation is off.
+	{
+		dir, srv := makeHTTPServer(t)
+		defer os.RemoveAll(dir)
+		defer srv.Shutdown()
+		defer srv.agent.Shutdown()
+
+		resp := httptest.NewRecorder()
+		handler := func(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+			return nil, nil
+		}
+
+		req, _ := http.NewRequest("GET", "/v1/agent/self", nil)
+		srv.wrap(handler)(resp, req)
+
+		translate := resp.Header().Get("X-Consul-Translate-Addresses")
+		if translate != "" {
+			t.Fatalf("bad: expected %q, got %q", "", translate)
+		}
+	}
+
+	// Header should be set to true if it's turned on.
+	{
+		dir, srv := makeHTTPServer(t)
+		srv.agent.config.TranslateWanAddrs = true
+		defer os.RemoveAll(dir)
+		defer srv.Shutdown()
+		defer srv.agent.Shutdown()
+
+		resp := httptest.NewRecorder()
+		handler := func(resp http.ResponseWriter, req *http.Request) (interface{}, error) {
+			return nil, nil
+		}
+
+		req, _ := http.NewRequest("GET", "/v1/agent/self", nil)
+		srv.wrap(handler)(resp, req)
+
+		translate := resp.Header().Get("X-Consul-Translate-Addresses")
+		if translate != "true" {
+			t.Fatalf("bad: expected %q, got %q", "true", translate)
+		}
+	}
+}
+
 func TestHTTPAPIResponseHeaders(t *testing.T) {
 	dir, srv := makeHTTPServer(t)
 	srv.agent.config.HTTPAPIResponseHeaders = map[string]string{
@@ -328,6 +394,7 @@ func testPrettyPrint(pretty string, t *testing.T) {
 	srv.wrap(handler)(resp, req)
 
 	expected, _ := json.MarshalIndent(r, "", "    ")
+	expected = append(expected, "\n"...)
 	actual, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		t.Fatalf("err: %s", err)
@@ -595,7 +662,7 @@ func TestACLResolution(t *testing.T) {
 			t.Fatalf("bad: %s", token)
 		}
 
-		// Querystring token has precendence over header and agent tokens
+		// Querystring token has precedence over header and agent tokens
 		srv.parseToken(reqBothTokens, &token)
 		if token != "baz" {
 			t.Fatalf("bad: %s", token)

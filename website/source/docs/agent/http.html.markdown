@@ -16,14 +16,16 @@ Each endpoint manages a different aspect of Consul:
 
 * [acl](http/acl.html) - Access Control Lists
 * [agent](http/agent.html) - Consul Agent
-* [catalog](http/catalog.html) - Nodes and services
-* [coordinate](http/coordinate.html) - Network coordinates
+* [catalog](http/catalog.html) - Nodes and Services
+* [coordinate](http/coordinate.html) - Network Coordinates
 * [event](http/event.html) - User Events
-* [health](http/health.html) - Health checks
-* [kv](http/kv.html) - Key/Value store
+* [health](http/health.html) - Health Checks
+* [kv](http/kv.html) - Key/Value Store
+* [operator](http/operator.html) - Consul Operator Tools
 * [query](http/query.html) - Prepared Queries
 * [session](http/session.html) - Sessions
-* [status](http/status.html) - Consul system status
+* [snapshot](http/snapshot.html) - Consul Snapshots for Disaster Recovery
+* [status](http/status.html) - Consul System Status
 
 Each of these is documented in detail at the links above. Consul also has a number
 of internal APIs which are purposely undocumented and subject to change.
@@ -34,9 +36,9 @@ Certain endpoints support a feature called a "blocking query." A blocking query
 is used to wait for a potential change using long polling.
 
 Not all endpoints support blocking, but those that do are clearly designated in the
-documentation.  Any endpoint that supports blocking will also set the HTTP header
+documentation. Any endpoint that supports blocking will also set the HTTP header
 `X-Consul-Index`, a unique identifier representing the current state of the
-requested resource.  On subsequent requests for this resource, the client can set the `index`
+requested resource. On subsequent requests for this resource, the client can set the `index`
 query string parameter to the value of `X-Consul-Index`, indicating that the client wishes
 to wait for any changes subsequent to that index.
 
@@ -49,7 +51,7 @@ A critical note is that the return of a blocking request is **no guarantee** of 
 is possible that the timeout was reached or that there was an idempotent write that does
 not affect the result of the query.
 
-## Consistency Modes
+## <a id="consistency"></a>Consistency Modes
 
 Most of the read query endpoints support multiple levels of consistency. Since no policy will
 suit all clients' needs, these consistency modes allow the user to have the ultimate say in
@@ -61,7 +63,7 @@ The three read modes are:
   there is a small window in which a new leader may be elected during which the old leader may
   service stale values. The trade-off is fast reads but potentially stale values. The condition
   resulting in stale reads is hard to trigger, and most clients should not need to worry about
-  this case.  Also, note that this race condition only applies to reads, not writes.
+  this case. Also, note that this race condition only applies to reads, not writes.
 
 * consistent - This mode is strongly consistent without caveats. It requires
   that a leader verify with a quorum of peers that it is still leader. This
@@ -85,7 +87,7 @@ by clients to gauge the staleness of a result and take appropriate action.
 
 ## Formatted JSON Output
 
-By default, the output of all HTTP API requests is minimized JSON.  If the client passes `pretty`
+By default, the output of all HTTP API requests is minimized JSON. If the client passes `pretty`
 on the query string, formatted JSON will be returned.
 
 ## ACLs
@@ -96,3 +98,12 @@ configuration option. However, the token can also be specified per-request
 by using the `X-Consul-Token` request header or the `token` querystring
 parameter. The request header takes precedence over the default token, and
 the querystring parameter takes precedence over everything.
+
+
+## <a id="translate_header"></a>Translated Addresses
+
+Consul 0.7 added the ability to translate addresses in HTTP response based on the configuration
+setting for [`translate_wan_addrs`](/docs/agent/options.html#translate_wan_addrs). In order to
+allow clients to know if address translation is in effect, the `X-Consul-Translate-Addresses`
+header will be added if translation is enabled, and will have a value of `true`. If translation
+is not enabled then this header will not be present.

@@ -32,6 +32,7 @@ func TestPreparedQuery_Apply(t *testing.T) {
 		Datacenter: "dc1",
 		Op:         structs.PreparedQueryCreate,
 		Query: &structs.PreparedQuery{
+			Name: "test",
 			Service: structs.ServiceQuery{
 				Service: "redis",
 			},
@@ -459,7 +460,9 @@ func TestPreparedQuery_Apply_ACLDeny(t *testing.T) {
 }
 
 func TestPreparedQuery_Apply_ForwardLeader(t *testing.T) {
-	dir1, s1 := testServer(t)
+	dir1, s1 := testServerWithConfig(t, func(c *Config) {
+		c.Bootstrap = false
+	})
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
 	codec1 := rpcClient(t, s1)
@@ -513,6 +516,7 @@ func TestPreparedQuery_Apply_ForwardLeader(t *testing.T) {
 		Datacenter: "dc1",
 		Op:         structs.PreparedQueryCreate,
 		Query: &structs.PreparedQuery{
+			Name: "test",
 			Service: structs.ServiceQuery{
 				Service: "redis",
 			},
@@ -529,53 +533,88 @@ func TestPreparedQuery_Apply_ForwardLeader(t *testing.T) {
 func TestPreparedQuery_parseQuery(t *testing.T) {
 	query := &structs.PreparedQuery{}
 
-	err := parseQuery(query)
+	err := parseQuery(query, true)
+	if err == nil || !strings.Contains(err.Error(), "Must be bound to a session") {
+		t.Fatalf("bad: %v", err)
+	}
+
+	query.Session = "adf4238a-882b-9ddc-4a9d-5b6758e4159e"
+	err = parseQuery(query, true)
 	if err == nil || !strings.Contains(err.Error(), "Must provide a Service") {
 		t.Fatalf("bad: %v", err)
 	}
 
-	query.Service.Service = "foo"
-	if err := parseQuery(query); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	query.Token = redactedToken
-	err = parseQuery(query)
-	if err == nil || !strings.Contains(err.Error(), "Bad Token") {
+	query.Session = ""
+	query.Template.Type = "some-kind-of-template"
+	err = parseQuery(query, true)
+	if err == nil || !strings.Contains(err.Error(), "Must provide a Service") {
 		t.Fatalf("bad: %v", err)
 	}
 
-	query.Token = "adf4238a-882b-9ddc-4a9d-5b6758e4159e"
-	if err := parseQuery(query); err != nil {
-		t.Fatalf("err: %v", err)
-	}
-
-	query.Service.Failover.NearestN = -1
-	err = parseQuery(query)
-	if err == nil || !strings.Contains(err.Error(), "Bad NearestN") {
+	query.Template.Type = ""
+	err = parseQuery(query, false)
+	if err == nil || !strings.Contains(err.Error(), "Must provide a Service") {
 		t.Fatalf("bad: %v", err)
 	}
 
-	query.Service.Failover.NearestN = 3
-	if err := parseQuery(query); err != nil {
-		t.Fatalf("err: %v", err)
-	}
+	// None of the rest of these care about version 8 ACL enforcement.
+	for _, version8 := range []bool{true, false} {
+		query = &structs.PreparedQuery{}
+		query.Session = "adf4238a-882b-9ddc-4a9d-5b6758e4159e"
+		query.Service.Service = "foo"
+		if err := parseQuery(query, version8); err != nil {
+			t.Fatalf("err: %v", err)
+		}
 
-	query.DNS.TTL = "two fortnights"
-	err = parseQuery(query)
-	if err == nil || !strings.Contains(err.Error(), "Bad DNS TTL") {
-		t.Fatalf("bad: %v", err)
-	}
+		query.Token = redactedToken
+		err = parseQuery(query, version8)
+		if err == nil || !strings.Contains(err.Error(), "Bad Token") {
+			t.Fatalf("bad: %v", err)
+		}
 
-	query.DNS.TTL = "-3s"
-	err = parseQuery(query)
-	if err == nil || !strings.Contains(err.Error(), "must be >=0") {
-		t.Fatalf("bad: %v", err)
-	}
+		query.Token = "adf4238a-882b-9ddc-4a9d-5b6758e4159e"
+		if err := parseQuery(query, version8); err != nil {
+			t.Fatalf("err: %v", err)
+		}
 
-	query.DNS.TTL = "3s"
-	if err := parseQuery(query); err != nil {
-		t.Fatalf("err: %v", err)
+		query.Service.Failover.NearestN = -1
+		err = parseQuery(query, version8)
+		if err == nil || !strings.Contains(err.Error(), "Bad NearestN") {
+			t.Fatalf("bad: %v", err)
+		}
+
+		query.Service.Failover.NearestN = 3
+		if err := parseQuery(query, version8); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		query.DNS.TTL = "two fortnights"
+		err = parseQuery(query, version8)
+		if err == nil || !strings.Contains(err.Error(), "Bad DNS TTL") {
+			t.Fatalf("bad: %v", err)
+		}
+
+		query.DNS.TTL = "-3s"
+		err = parseQuery(query, version8)
+		if err == nil || !strings.Contains(err.Error(), "must be >=0") {
+			t.Fatalf("bad: %v", err)
+		}
+
+		query.DNS.TTL = "3s"
+		if err := parseQuery(query, version8); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		query.Service.NodeMeta = map[string]string{"": "somevalue"}
+		err = parseQuery(query, version8)
+		if err == nil || !strings.Contains(err.Error(), "cannot be blank") {
+			t.Fatalf("bad: %v", err)
+		}
+
+		query.Service.NodeMeta = map[string]string{"somekey": "somevalue"}
+		if err := parseQuery(query, version8); err != nil {
+			t.Fatalf("err: %v", err)
+		}
 	}
 }
 
@@ -915,9 +954,25 @@ func TestPreparedQuery_Get(t *testing.T) {
 		}
 	}
 
+	// Create a session.
+	var session string
+	{
+		req := structs.SessionRequest{
+			Datacenter: "dc1",
+			Op:         structs.SessionCreate,
+			Session: structs.Session{
+				Node: s1.config.NodeName,
+			},
+		}
+		if err := msgpackrpc.CallWithCodec(codec, "Session.Apply", &req, &session); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	}
+
 	// Now update the query to take away its name.
 	query.Op = structs.PreparedQueryUpdate
 	query.Query.Name = ""
+	query.Query.Session = session
 	if err := msgpackrpc.CallWithCodec(codec, "PreparedQuery.Apply", &query, &reply); err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1168,9 +1223,25 @@ func TestPreparedQuery_List(t *testing.T) {
 		}
 	}
 
+	// Create a session.
+	var session string
+	{
+		req := structs.SessionRequest{
+			Datacenter: "dc1",
+			Op:         structs.SessionCreate,
+			Session: structs.Session{
+				Node: s1.config.NodeName,
+			},
+		}
+		if err := msgpackrpc.CallWithCodec(codec, "Session.Apply", &req, &session); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+	}
+
 	// Now take away the query name.
 	query.Op = structs.PreparedQueryUpdate
 	query.Query.Name = ""
+	query.Query.Session = session
 	if err := msgpackrpc.CallWithCodec(codec, "PreparedQuery.Apply", &query, &reply); err != nil {
 		t.Fatalf("err: %v", err)
 	}
@@ -1357,6 +1428,7 @@ func TestPreparedQuery_Execute(t *testing.T) {
 		c.ACLDatacenter = "dc1"
 		c.ACLMasterToken = "root"
 		c.ACLDefaultPolicy = "deny"
+		c.ACLEnforceVersion8 = false
 	})
 	defer os.RemoveAll(dir1)
 	defer s1.Shutdown()
@@ -1421,12 +1493,19 @@ func TestPreparedQuery_Execute(t *testing.T) {
 					Datacenter: dc,
 					Node:       fmt.Sprintf("node%d", i+1),
 					Address:    fmt.Sprintf("127.0.0.%d", i+1),
+					NodeMeta: map[string]string{
+						"group":         fmt.Sprintf("%d", i/5),
+						"instance_type": "t2.micro",
+					},
 					Service: &structs.NodeService{
 						Service: "foo",
 						Port:    8000,
 						Tags:    []string{dc, fmt.Sprintf("tag%d", i+1)},
 					},
 					WriteRequest: structs.WriteRequest{Token: "root"},
+				}
+				if i == 0 {
+					req.NodeMeta["unique"] = "true"
 				}
 
 				var codec rpc.ClientCodec
@@ -1449,6 +1528,7 @@ func TestPreparedQuery_Execute(t *testing.T) {
 		Datacenter: "dc1",
 		Op:         structs.PreparedQueryCreate,
 		Query: &structs.PreparedQuery{
+			Name: "test",
 			Service: structs.ServiceQuery{
 				Service: "foo",
 			},
@@ -1522,6 +1602,72 @@ func TestPreparedQuery_Execute(t *testing.T) {
 			!reflect.DeepEqual(reply.DNS, query.Query.DNS) ||
 			!reply.QueryMeta.KnownLeader {
 			t.Fatalf("bad: %v", reply)
+		}
+	}
+
+	// Run various service queries with node metadata filters.
+	if false {
+		cases := []struct {
+			filters  map[string]string
+			numNodes int
+		}{
+			{
+				filters:  map[string]string{},
+				numNodes: 10,
+			},
+			{
+				filters:  map[string]string{"instance_type": "t2.micro"},
+				numNodes: 10,
+			},
+			{
+				filters:  map[string]string{"group": "1"},
+				numNodes: 5,
+			},
+			{
+				filters:  map[string]string{"group": "0", "unique": "true"},
+				numNodes: 1,
+			},
+		}
+
+		for _, tc := range cases {
+			nodeMetaQuery := structs.PreparedQueryRequest{
+				Datacenter: "dc1",
+				Op:         structs.PreparedQueryCreate,
+				Query: &structs.PreparedQuery{
+					Service: structs.ServiceQuery{
+						Service:  "foo",
+						NodeMeta: tc.filters,
+					},
+					DNS: structs.QueryDNSOptions{
+						TTL: "10s",
+					},
+				},
+				WriteRequest: structs.WriteRequest{Token: "root"},
+			}
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Apply", &nodeMetaQuery, &nodeMetaQuery.Query.ID); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+
+			req := structs.PreparedQueryExecuteRequest{
+				Datacenter:    "dc1",
+				QueryIDOrName: nodeMetaQuery.Query.ID,
+				QueryOptions:  structs.QueryOptions{Token: execToken},
+			}
+
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+
+			if len(reply.Nodes) != tc.numNodes {
+				t.Fatalf("bad: %v, %v", len(reply.Nodes), tc.numNodes)
+			}
+
+			for _, node := range reply.Nodes {
+				if !structs.SatisfiesMetaFilters(node.Node.Meta, tc.filters) {
+					t.Fatalf("bad: %v", node.Node.Meta)
+				}
+			}
 		}
 	}
 
@@ -1607,6 +1753,219 @@ func TestPreparedQuery_Execute(t *testing.T) {
 		t.Fatalf("unique shuffle ratio too low: %d/100", len(uniques))
 	}
 
+	// Set the query to return results nearest to node3. This is the only
+	// node with coordinates, and it carries the service we are asking for,
+	// so node3 should always show up first.
+	query.Op = structs.PreparedQueryUpdate
+	query.Query.Service.Near = "node3"
+	if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Apply", &query, &query.Query.ID); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Now run the query and make sure the sort looks right.
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Agent: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "node3",
+			},
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		for i := 0; i < 10; i++ {
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if n := len(reply.Nodes); n != 10 {
+				t.Fatalf("expect 10 nodes, got: %d", n)
+			}
+			if node := reply.Nodes[0].Node.Node; node != "node3" {
+				t.Fatalf("expect node3 first, got: %q", node)
+			}
+		}
+	}
+
+	// Query again, but this time set a client-supplied query source. This
+	// proves that we allow overriding the baked-in value with ?near.
+	{
+		// Set up the query with a non-existent node. This will cause the
+		// nodes to be shuffled if the passed node is respected, proving
+		// that we allow the override to happen.
+		req := structs.PreparedQueryExecuteRequest{
+			Source: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "foo",
+			},
+			Agent: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "node3",
+			},
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		shuffled := false
+		for i := 0; i < 10; i++ {
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if n := len(reply.Nodes); n != 10 {
+				t.Fatalf("expect 10 nodes, got: %d", n)
+			}
+			if node := reply.Nodes[0].Node.Node; node != "node3" {
+				shuffled = true
+				break
+			}
+		}
+
+		if !shuffled {
+			t.Fatalf("expect nodes to be shuffled")
+		}
+	}
+
+	// If the exact node we are sorting near appears in the list, make sure it
+	// gets popped to the front of the result.
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Source: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "node1",
+			},
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		for i := 0; i < 10; i++ {
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if n := len(reply.Nodes); n != 10 {
+				t.Fatalf("expect 10 nodes, got: %d", n)
+			}
+			if node := reply.Nodes[0].Node.Node; node != "node1" {
+				t.Fatalf("expect node1 first, got: %q", node)
+			}
+		}
+	}
+
+	// Bake the magic "_agent" flag into the query.
+	query.Query.Service.Near = "_agent"
+	if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Apply", &query, &query.Query.ID); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
+	// Check that we sort the local agent first when the magic flag is set.
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Agent: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "node3",
+			},
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		for i := 0; i < 10; i++ {
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if n := len(reply.Nodes); n != 10 {
+				t.Fatalf("expect 10 nodes, got: %d", n)
+			}
+			if node := reply.Nodes[0].Node.Node; node != "node3" {
+				t.Fatalf("expect node3 first, got: %q", node)
+			}
+		}
+	}
+
+	// Check that the query isn't just sorting "node3" first because we
+	// provided it in the Agent query source. Proves that we use the
+	// Agent source when the magic "_agent" flag is passed.
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Agent: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "foo",
+			},
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		// Expect the set to be shuffled since we have no coordinates
+		// on the "foo" node.
+		shuffled := false
+		for i := 0; i < 10; i++ {
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if n := len(reply.Nodes); n != 10 {
+				t.Fatalf("expect 10 nodes, got: %d", n)
+			}
+			if node := reply.Nodes[0].Node.Node; node != "node3" {
+				shuffled = true
+				break
+			}
+		}
+
+		if !shuffled {
+			t.Fatal("expect nodes to be shuffled")
+		}
+	}
+
+	// Shuffles if the response comes from a non-local DC. Proves that the
+	// agent query source does not interfere with the order.
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Source: structs.QuerySource{
+				Datacenter: "dc2",
+				Node:       "node3",
+			},
+			Agent: structs.QuerySource{
+				Datacenter: "dc1",
+				Node:       "node3",
+			},
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		shuffled := false
+		for i := 0; i < 10; i++ {
+			var reply structs.PreparedQueryExecuteResponse
+			if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+				t.Fatalf("err: %v", err)
+			}
+			if n := len(reply.Nodes); n != 10 {
+				t.Fatalf("expect 10 nodes, got: %d", n)
+			}
+			if reply.Nodes[0].Node.Node != "node3" {
+				shuffled = true
+				break
+			}
+		}
+
+		if !shuffled {
+			t.Fatal("expect node shuffle for remote results")
+		}
+	}
+
+	// Un-bake the near parameter.
+	query.Query.Service.Near = ""
+	if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Apply", &query, &query.Query.ID); err != nil {
+		t.Fatalf("err: %v", err)
+	}
+
 	// Update the health of a node to mark it critical.
 	setHealth := func(node string, health string) {
 		req := structs.RegisterRequest{
@@ -1683,7 +2042,6 @@ func TestPreparedQuery_Execute(t *testing.T) {
 	}
 
 	// Make the query more picky so it excludes warning nodes.
-	query.Op = structs.PreparedQueryUpdate
 	query.Query.Service.OnlyPassing = true
 	if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Apply", &query, &query.Query.ID); err != nil {
 		t.Fatalf("err: %v", err)
@@ -1856,6 +2214,58 @@ func TestPreparedQuery_Execute(t *testing.T) {
 			!reflect.DeepEqual(reply.DNS, query.Query.DNS) ||
 			!reply.QueryMeta.KnownLeader {
 			t.Fatalf("bad: %v", reply)
+		}
+	}
+
+	// Turn on version 8 ACLs, which will start to filter even with the exec
+	// token.
+	s1.config.ACLEnforceVersion8 = true
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		var reply structs.PreparedQueryExecuteResponse
+		if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		if len(reply.Nodes) != 0 ||
+			reply.Datacenter != "dc1" || reply.Failovers != 0 ||
+			reply.Service != query.Query.Service.Service ||
+			!reflect.DeepEqual(reply.DNS, query.Query.DNS) ||
+			!reply.QueryMeta.KnownLeader {
+			t.Fatalf("bad: %v", reply)
+		}
+	}
+
+	// Revert version 8 ACLs and make sure the query works again.
+	s1.config.ACLEnforceVersion8 = false
+	{
+		req := structs.PreparedQueryExecuteRequest{
+			Datacenter:    "dc1",
+			QueryIDOrName: query.Query.ID,
+			QueryOptions:  structs.QueryOptions{Token: execToken},
+		}
+
+		var reply structs.PreparedQueryExecuteResponse
+		if err := msgpackrpc.CallWithCodec(codec1, "PreparedQuery.Execute", &req, &reply); err != nil {
+			t.Fatalf("err: %v", err)
+		}
+
+		if len(reply.Nodes) != 8 ||
+			reply.Datacenter != "dc1" || reply.Failovers != 0 ||
+			reply.Service != query.Query.Service.Service ||
+			!reflect.DeepEqual(reply.DNS, query.Query.DNS) ||
+			!reply.QueryMeta.KnownLeader {
+			t.Fatalf("bad: %v", reply)
+		}
+		for _, node := range reply.Nodes {
+			if node.Node.Node == "node1" || node.Node.Node == "node3" {
+				t.Fatalf("bad: %v", node)
+			}
 		}
 	}
 
@@ -2094,6 +2504,7 @@ func TestPreparedQuery_Execute_ForwardLeader(t *testing.T) {
 		Datacenter: "dc1",
 		Op:         structs.PreparedQueryCreate,
 		Query: &structs.PreparedQuery{
+			Name: "test",
 			Service: structs.ServiceQuery{
 				Service: "redis",
 			},
@@ -2357,6 +2768,7 @@ func (m *mockQueryServer) ForwardDC(method, dc string, args interface{}, reply i
 
 func TestPreparedQuery_queryFailover(t *testing.T) {
 	query := &structs.PreparedQuery{
+		Name: "test",
 		Service: structs.ServiceQuery{
 			Failover: structs.QueryDatacenterOptions{
 				NearestN:    0,
