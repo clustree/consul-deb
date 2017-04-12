@@ -14,6 +14,11 @@ var validUUID = regexp.MustCompile(`(?i)^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f
 
 // isUUID returns true if the given string is a valid UUID.
 func isUUID(str string) bool {
+	const uuidLen = 36
+	if len(str) != uuidLen {
+		return false
+	}
+
 	return validUUID.MatchString(str)
 }
 
@@ -53,7 +58,7 @@ func (s *StateSnapshot) PreparedQueries() (structs.PreparedQueries, error) {
 	return ret, nil
 }
 
-// PrepparedQuery is used when restoring from a snapshot. For general inserts,
+// PreparedQuery is used when restoring from a snapshot. For general inserts,
 // use PreparedQuerySet.
 func (s *StateRestore) PreparedQuery(query *structs.PreparedQuery) error {
 	// If this is a template, compile it, otherwise leave the compiled
