@@ -1,3 +1,9 @@
+consul (0.8.0-1~xenial1~clustree1) xenial; urgency=medium
+
+  * New Upstream release (0.8.0).
+
+ -- Sebastien Badia <sbadia@debian.org>  Wed, 12 Apr 2017 11:30:59 +0200
+
 consul (0.7.4-1~xenial1~clustree1) xenial; urgency=medium
 
   * New Upstream release (0.7.4).
