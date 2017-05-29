@@ -1,3 +1,10 @@
+consul (0.8.3-1~xenial1~clustree1) xenial; urgency=medium
+
+  * New Upstream release (0.8.3).
+  * Switch to go 1.8.
+
+ -- Sebastien Badia <sbadia@debian.org>  Mon, 29 May 2017 13:23:23 +0200
+
 consul (0.8.0-1~xenial1~clustree1) xenial; urgency=medium
 
   * New Upstream release (0.8.0).
