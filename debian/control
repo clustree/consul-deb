@@ -10,7 +10,7 @@ Build-Depends: adduser,
                debhelper (>= 9),
                dh-systemd,
                git,
-               golang-go (>= 2:1.7) | golang-1.7,
+               golang-go (>= 2:1.8) | golang-1.8,
                pandoc
 
 Package: consul
