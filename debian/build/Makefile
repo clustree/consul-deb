@@ -54,6 +54,7 @@ runcontainer:
 		-v ~/.devscripts:/root/.devscripts \
 		-v ~/.gnupg:/root/.gnupg \
 		-v $(PKGDIR):/opt/consul-deb:ro \
+		-v $(PKGDIR)/.git:/opt/consul-deb/.git:rw \
 		-v /tmp/consul-deb:/tmp/consul-deb \
 		$(CONTAINER_OPTS) \
 		ubuntu:$(DISTRO)-consul-deb $(CONTAINER_CMD)
