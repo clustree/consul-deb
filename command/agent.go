@@ -135,23 +135,23 @@ func (cmd *AgentCommand) readConfig() *agent.Config {
 		"Maximum number of join attempts. Defaults to 0, which will retry indefinitely.")
 	f.StringVar(&retryInterval, "retry-interval", "",
 		"Time to wait between join attempts.")
-	f.StringVar(&cmdCfg.RetryJoinEC2.Region, "retry-join-ec2-region", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinEC2.Region, "retry-join-ec2-region", "",
 		"EC2 Region to discover servers in.")
-	f.StringVar(&cmdCfg.RetryJoinEC2.TagKey, "retry-join-ec2-tag-key", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinEC2.TagKey, "retry-join-ec2-tag-key", "",
 		"EC2 tag key to filter on for server discovery.")
-	f.StringVar(&cmdCfg.RetryJoinEC2.TagValue, "retry-join-ec2-tag-value", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinEC2.TagValue, "retry-join-ec2-tag-value", "",
 		"EC2 tag value to filter on for server discovery.")
-	f.StringVar(&cmdCfg.RetryJoinGCE.ProjectName, "retry-join-gce-project-name", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinGCE.ProjectName, "retry-join-gce-project-name", "",
 		"Google Compute Engine project to discover servers in.")
-	f.StringVar(&cmdCfg.RetryJoinGCE.ZonePattern, "retry-join-gce-zone-pattern", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinGCE.ZonePattern, "retry-join-gce-zone-pattern", "",
 		"Google Compute Engine region or zone to discover servers in (regex pattern).")
-	f.StringVar(&cmdCfg.RetryJoinGCE.TagValue, "retry-join-gce-tag-value", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinGCE.TagValue, "retry-join-gce-tag-value", "",
 		"Google Compute Engine tag value to filter on for server discovery.")
-	f.StringVar(&cmdCfg.RetryJoinGCE.CredentialsFile, "retry-join-gce-credentials-file", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinGCE.CredentialsFile, "retry-join-gce-credentials-file", "",
 		"Path to credentials JSON file to use with Google Compute Engine.")
-	f.StringVar(&cmdCfg.RetryJoinAzure.TagName, "retry-join-azure-tag-name", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinAzure.TagName, "retry-join-azure-tag-name", "",
 		"Azure tag name to filter on for server discovery.")
-	f.StringVar(&cmdCfg.RetryJoinAzure.TagValue, "retry-join-azure-tag-value", "",
+	f.StringVar(&cmdCfg.DeprecatedRetryJoinAzure.TagValue, "retry-join-azure-tag-value", "",
 		"Azure tag value to filter on for server discovery.")
 	f.Var((*configutil.AppendSliceValue)(&cmdCfg.RetryJoinWan), "retry-join-wan",
 		"Address of an agent to join -wan at start time with retries enabled. "+
@@ -430,20 +430,6 @@ func (cmd *AgentCommand) readConfig() *agent.Config {
 		cmd.UI.Error("WARNING: Bootstrap mode enabled! Do not enable unless necessary")
 	}
 
-	// Need both tag key and value for EC2 discovery
-	if cfg.RetryJoinEC2.TagKey != "" || cfg.RetryJoinEC2.TagValue != "" {
-		if cfg.RetryJoinEC2.TagKey == "" || cfg.RetryJoinEC2.TagValue == "" {
-			cmd.UI.Error("tag key and value are both required for EC2 retry-join")
-			return nil
-		}
-	}
-
-	// EC2 and GCE discovery are mutually exclusive
-	if cfg.RetryJoinEC2.TagKey != "" && cfg.RetryJoinEC2.TagValue != "" && cfg.RetryJoinGCE.TagValue != "" {
-		cmd.UI.Error("EC2 and GCE discovery are mutually exclusive. Please provide one or the other.")
-		return nil
-	}
-
 	// Verify the node metadata entries are valid
 	if err := structs.ValidateMetadata(cfg.Meta); err != nil {
 		cmd.UI.Error(fmt.Sprintf("Failed to parse node metadata: %v", err))
@@ -461,6 +447,16 @@ func (cmd *AgentCommand) readConfig() *agent.Config {
 	cfg.Revision = cmd.Revision
 	cfg.Version = cmd.Version
 	cfg.VersionPrerelease = cmd.VersionPrerelease
+
+	if err := cfg.ResolveTmplAddrs(); err != nil {
+		cmd.UI.Error(fmt.Sprintf("Failed to parse config: %v", err))
+		return nil
+	}
+
+	if err := cfg.SetupTaggedAndAdvertiseAddrs(); err != nil {
+		cmd.UI.Error(fmt.Sprintf("Failed to set up tagged and advertise addresses: %v", err))
+		return nil
+	}
 
 	return cfg
 }
@@ -605,7 +601,7 @@ func circonusSink(config *agent.Config, hostname string) (metrics.MetricSink, er
 	return sink, nil
 }
 
-func startupTelemetry(config *agent.Config) error {
+func startupTelemetry(config *agent.Config) (*metrics.InmemSink, error) {
 	// Setup telemetry
 	// Aggregate on 10 second intervals for 1 minute. Expose the
 	// metrics over stderr when there is a SIGUSR1 received.
@@ -613,6 +609,7 @@ func startupTelemetry(config *agent.Config) error {
 	metrics.DefaultInmemSignal(memSink)
 	metricsConf := metrics.DefaultConfig(config.Telemetry.StatsitePrefix)
 	metricsConf.EnableHostname = !config.Telemetry.DisableHostname
+	metricsConf.FilterDefault = *config.Telemetry.FilterDefault
 
 	var sinks metrics.FanoutSink
 	addSink := func(name string, fn func(*agent.Config, string) (metrics.MetricSink, error)) error {
@@ -627,16 +624,16 @@ func startupTelemetry(config *agent.Config) error {
 	}
 
 	if err := addSink("statsite", statsiteSink); err != nil {
-		return err
+		return nil, err
 	}
 	if err := addSink("statsd", statsdSink); err != nil {
-		return err
+		return nil, err
 	}
 	if err := addSink("dogstatd", dogstatdSink); err != nil {
-		return err
+		return nil, err
 	}
 	if err := addSink("circonus", circonusSink); err != nil {
-		return err
+		return nil, err
 	}
 
 	if len(sinks) > 0 {
@@ -646,7 +643,7 @@ func startupTelemetry(config *agent.Config) error {
 		metricsConf.EnableHostname = false
 		metrics.NewGlobal(metricsConf, memSink)
 	}
-	return nil
+	return memSink, nil
 }
 
 func (cmd *AgentCommand) Run(args []string) int {
@@ -686,7 +683,8 @@ func (cmd *AgentCommand) run(args []string) int {
 	cmd.logOutput = logOutput
 	cmd.logger = log.New(logOutput, "", log.LstdFlags)
 
-	if err := startupTelemetry(config); err != nil {
+	memSink, err := startupTelemetry(config)
+	if err != nil {
 		cmd.UI.Error(err.Error())
 		return 1
 	}
@@ -700,6 +698,7 @@ func (cmd *AgentCommand) run(args []string) int {
 	}
 	agent.LogOutput = logOutput
 	agent.LogWriter = logWriter
+	agent.MemSink = memSink
 
 	if err := agent.Start(); err != nil {
 		cmd.UI.Error(fmt.Sprintf("Error starting agent: %s", err))
