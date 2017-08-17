@@ -83,3 +83,13 @@ variable:
     DEBSIGN_KEYID=<gpg key id>
 
 (you can specify other values, e.g. `DEBFULLNAME` and `DEBEMAIL`).
+
+## Package update (import a new consul version)
+
+To import a new consul version in this repo (and therefore build the
+corresponding Debian package), you can use a git-buildbackage workflow.
+
+    $ git checkout debian
+    $ gbp import-orig --uscan
+    $ gbp dch
+    $ git tag -s v0.9.2-1_xenial1_clustree1 -m 'Update changelog for xenial'
