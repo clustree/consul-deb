@@ -1,3 +1,9 @@
+consul (1.0.3-1~xenial1~clustree1) xenial; urgency=medium
+
+  * New upstream version 1.0.3
+
+ -- Sebastien Badia <sbadia@debian.org>  Thu, 25 Jan 2018 17:05:59 +0100
+
 consul (1.0.2-1~xenial1~clustree1) xenial; urgency=medium
 
   * New upstream version 1.0.2
