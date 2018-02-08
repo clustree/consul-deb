@@ -1,3 +1,9 @@
+consul (1.0.5-2~xenial1~clustree1) xenial; urgency=medium
+
+  * Bump to go 1.9 (refs: https://github.com/hashicorp/consul/pull/3872)
+
+ -- Sebastien Badia <sbadia@debian.org>  Thu, 08 Feb 2018 16:28:42 +0100
+
 consul (1.0.5-1~xenial1~clustree1) xenial; urgency=medium
 
   * New upstream version 1.0.5
