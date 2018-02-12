@@ -1,3 +1,10 @@
+## 1.0.6 (February 9, 2018) ##
+
+BUG FIXES:
+
+* agent: Fixed a panic when using the Azure provider for retry-join. [[GH-3875](https://github.com/hashicorp/consul/issues/3875)]
+* agent: Fixed a panic when querying Consul's DNS interface over TCP. [[GH-3877](https://github.com/hashicorp/consul/issues/3877)]
+
 ## 1.0.5 (February 7, 2018)
 
 NOTE ON SKIPPED RELEASE 1.0.4:
